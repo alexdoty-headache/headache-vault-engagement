@@ -23,6 +23,7 @@ const { transitionState } = require('../state-machine/transitions');
 const { scheduleDailyCheckin, cancelPatientJobs, scheduleOneShot } = require('../services/scheduler');
 const { render, getNextAck } = require('../templates');
 const { parseTime } = require('../utils/parse-time');
+const { parseResponse } = require('../ai/parser');
 
 // ============================================================================
 // ENROLLED — Waiting for START
@@ -276,46 +277,54 @@ async function handleDailyActive(patient, messageBody) {
         return await handleOnboarding(patient, messageBody);
     }
 
-    // --- Try to parse as a daily check-in response ---
+    // --- Parse the daily check-in response via the AI pipeline ---
+    // parseResponse handles the full decision tree:
+    //   1. Numeric "1"-"5" → NUMERIC method, ACCEPT action
+    //   2. Natural language → Claude Haiku → AI_PARSED method
+    //   3. If API down → regex fallback → REGEX_FALLBACK method
+    //   4. Unparseable → null
+    const parsed = await parseResponse(messageBody);
 
-    // Clean numeric: 1-5
-    const numericLevel = parseNumericLevel(messageBody);
-    if (numericLevel) {
-        return await recordDailyResponse(patient, numericLevel, messageBody, 'NUMERIC', 1.0);
+    if (!parsed) {
+        // Completely unparseable — send full scale re-prompt
+        return { reply: render('ERR-DAILY'), templateId: 'ERR-DAILY' };
     }
 
-    // Natural language: send to AI parser
-    // For Phase 1, the AI parser is a separate module. If it's not
-    // available, we fall back to asking for a number.
-    try {
-        const aiResult = await parseWithAI(messageBody);
-
-        if (aiResult && aiResult.confidence >= 0.80) {
-            // High confidence: accept
+    // Route based on the parser's action decision
+    switch (parsed.action) {
+        case 'ACCEPT': {
+            // High confidence or numeric — record directly
+            const method = parsed.method === 'NUMERIC' ? 'NUMERIC' : 'AI_PARSED';
             return await recordDailyResponse(
-                patient, aiResult.level, messageBody, 'AI_PARSED', aiResult.confidence
+                patient,
+                parsed.level,
+                messageBody,
+                method,
+                parsed.confidence
             );
         }
 
-        if (aiResult && aiResult.confidence >= 0.60) {
-            // Medium confidence: clarify
+        case 'CLARIFY': {
+            // Medium confidence — ask the patient to confirm
             await supabase
                 .from('patients')
                 .update({ pending_question: 'CLARIFY_LEVEL' })
                 .eq('patient_id', patient.patient_id);
 
             return {
-                reply: render('CLARIFY-LEVEL', { parsedLevel: aiResult.level }),
+                reply: render('CLARIFY-LEVEL', { parsedLevel: parsed.level }),
                 templateId: 'CLARIFY-LEVEL',
             };
         }
-    } catch (err) {
-        console.error('AI parser error:', err);
-        // Fall through to error message
-    }
 
-    // Low confidence or parser error: ask for number
-    return { reply: render('ERR-DAILY'), templateId: 'ERR-DAILY' };
+        case 'REPROMPT': {
+            // Low confidence — send the full 1-5 scale
+            return { reply: render('ERR-DAILY'), templateId: 'ERR-DAILY' };
+        }
+
+        default:
+            return { reply: render('ERR-DAILY'), templateId: 'ERR-DAILY' };
+    }
 }
 
 /**
@@ -754,39 +763,6 @@ async function handleWeeklyResponse(patient, messageBody) {
 }
 
 /**
- * AI parser stub — will be replaced by the real Claude Haiku parser.
- * For now, does basic keyword matching as a fallback.
- */
-async function parseWithAI(text) {
-    // TODO: Replace with actual Claude API call (lib/ai/parser.js)
-    // This is a basic fallback for testing without the AI service.
-
-    const lower = text.toLowerCase();
-
-    // High-confidence keyword matches
-    if (/\b(clear|great|perfect|no headache|headache.free|didn.t notice)\b/.test(lower)) {
-        return { level: 1, confidence: 0.85, reasoning: 'keyword: no headache' };
-    }
-    if (/\b(mild|background|there but|noticed but|slight)\b/.test(lower)) {
-        return { level: 2, confidence: 0.80, reasoning: 'keyword: mild/noticed' };
-    }
-    if (/\b(push.?through|rough|managed|got through|tough)\b/.test(lower)) {
-        return { level: 3, confidence: 0.82, reasoning: 'keyword: pushed through' };
-    }
-    if (/\b(cancel|skip|left early|couldn.t go|had to leave|modified)\b/.test(lower)) {
-        return { level: 4, confidence: 0.83, reasoning: 'keyword: cancelled/skipped' };
-    }
-    if (/\b(bed|terrible|worst|couldn.t function|couldn.t do|debilitating)\b/.test(lower)) {
-        return { level: 5, confidence: 0.85, reasoning: 'keyword: couldn\'t function' };
-    }
-    if (/\b(fine|okay|ok|good|not bad)\b/.test(lower)) {
-        return { level: 2, confidence: 0.65, reasoning: 'keyword: ambiguous fine/okay → default L2' };
-    }
-
-    return null; // Can't parse
-}
-
-/**
  * Parse a fuzzy date like "March 15", "3/15", "march 15th".
  * Returns YYYY-MM-DD string or null.
  */
@@ -876,7 +852,6 @@ module.exports = {
     handleDormant,
     parseNumericLevel,
     // Exported for testing
-    parseWithAI,
     parseFuzzyDate,
     formatTime12,
 };
