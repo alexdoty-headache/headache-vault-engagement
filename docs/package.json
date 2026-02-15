@@ -1,0 +1,26 @@
+{
+  "name": "headache-vault-engagement",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Headache Vault Patient Engagement System - SMS-based headache tracking",
+  "scripts": {
+    "dev": "vercel dev",
+    "build": "vercel build",
+    "test": "node --test tests/**/*.test.js",
+    "test:ai-parser": "node --test tests/ai-parser.test.js",
+    "test:state-machine": "node --test tests/state-machine.test.js",
+    "migrate": "node scripts/run-migration.js",
+    "seed": "node scripts/seed-medications.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.39.0",
+    "@anthropic-ai/sdk": "^0.30.0",
+    "twilio": "^5.0.0"
+  },
+  "devDependencies": {
+    "vercel": "^37.0.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
