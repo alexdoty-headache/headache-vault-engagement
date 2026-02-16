@@ -5,6 +5,31 @@
 ## 2026-02-15
 ### Added
 - CHANGELOG.md, DECISIONS.md, TODO.md — project management files
+- lib/ai/parser.js — full AI classification pipeline using Claude 3.5 Haiku via structured tool_use output
+  - Numeric passthrough for direct 1–5 responses (no API call needed)
+  - AI classification for natural language text (e.g., "rough day but got through it")
+  - Regex fallback patterns for API outages (>30s timeout)
+  - Confidence-based routing: ≥0.80 accept, 0.60–0.79 clarify, <0.60 re-prompt
+  - Action-based return values (ACCEPT/CLARIFY/REPROMPT) for clean handler integration
+- tests/ai-parser.test.js — 96-test suite covering all specification patterns, edge cases, and full pipeline fallback behavior
+- api/cron/dispatch.js — outbound message dispatcher
+  - Processes 7 job types: daily check-ins, weekly questions, insight delivery, re-engagement, transition reminders, missed-day follow-ups, report generation
+  - Proactive response detection on daily check-ins (skips if patient already responded today)
+  - Atomic job locking via SELECT FOR UPDATE SKIP LOCKED
+  - Concurrent job processing for performance
+  - Error handling with retry logic per job
+
+### Changed
+- lib/handlers/state-handlers.js — replaced parseWithAI() stub with real parser integration
+  - handleDailyActive now uses parseResponse() from lib/ai/parser.js
+  - Routing switched from manual confidence checking to action-based dispatch (ACCEPT/CLARIFY/REPROMPT)
+  - Removed inline keyword-matching fallback (now handled by parser's regex fallback layer)
+- Supabase HIPAA BAA form submitted with detailed PHI descriptions and architecture overview
+
+### Infrastructure
+- Supabase HIPAA BAA application submitted
+- Drafted answers for Twilio and Vercel BAA processes (not yet submitted)
+- Identified deployment sequence: GitHub → Supabase migrations → Vercel config → Twilio 10DLC → BAAs
 
 ## 2026-02-12
 ### Added
@@ -38,8 +63,7 @@
 
 ### Known Issues
 - Twilio 10DLC healthcare registration not yet started (2–4 week lead time)
-- BAAs not yet executed with Supabase, Twilio, Vercel, Anthropic
-- AI parser (lib/ai/parser.js) not yet built
-- Cron dispatch handler (api/cron/dispatch.js) not yet built
+- BAAs not yet fully executed (Supabase submitted, others pending)
 - Enrollment endpoint (api/enroll.js) not yet built
 - Report generation not yet built
+- api/cron/missed-days.js not yet built

@@ -54,4 +54,20 @@
 **Context:** Visit Ready Reports need to be accessible to patients (via SMS link) and clinicians (via toggle on the same page). Could require login or use token-based URLs.
 **Decision:** Reports are accessed via unguessable token URLs (32-character random string). No login required. URLs expire after 90 days. Patient can request a new link via REPORT command.
 **Rationale:** Patients accessing reports via SMS link won't have accounts. Requiring login adds friction that would tank report access rates. Token URLs are standard for HIPAA-compliant document sharing when the link itself is the credential. The token is cryptographically random and not sequential.
-**Consequences:** Anyone with the URL can view the report. Mitigated by: token randomness, 90-day expiry, SMS delivery to verified phone number only. Acceptable risk for pilot. Can add authentication layer post-pilot if needed.
+**Consequences:** Anyone with the URL can view the report (mitigated by cryptographic randomness and expiration). No audit trail of who viewed the report beyond server logs.
+
+## ADR-008: Three-Tier AI Classification Pipeline with Structured tool_use Output
+**Date:** 2026-02-15
+**Status:** Accepted
+**Context:** Needed to classify natural language patient responses onto the HV-FIS 1–5 scale. The stub keyword matcher from 2/12 was functional for testing but not production-grade.
+**Decision:** Implement a three-tier pipeline: (1) numeric passthrough for direct 1–5 inputs (no API call), (2) Claude 3.5 Haiku classification via structured tool_use for natural language, (3) regex fallback patterns if the Anthropic API is unavailable (>30s timeout). Parser returns action-based results (ACCEPT/CLARIFY/REPROMPT) rather than raw confidence scores.
+**Rationale:** Numeric passthrough handles the expected majority of responses with zero latency and zero cost. Structured tool_use output eliminates JSON parsing fragility — Claude returns a typed object with level, confidence, and reasoning fields. Action-based returns simplify handler integration: the handler doesn't need to know about confidence thresholds, just what action to take. Regex fallback ensures patients can still be served during API outages.
+**Consequences:** Three code paths to maintain, but each is simple and independently testable. 96-test suite provides regression coverage. The action abstraction means confidence thresholds can be tuned in the parser without touching handler code.
+
+## ADR-009: Concurrent Job Processing in Cron Dispatcher
+**Date:** 2026-02-15
+**Status:** Accepted
+**Context:** The cron dispatch handler needs to process due jobs from the scheduled_jobs table every minute. Could process sequentially or concurrently.
+**Decision:** Process all locked jobs concurrently using Promise.allSettled(). Each job is an independent unit with its own error handling and retry logic. Proactive response detection on daily check-in jobs skips sending if the patient already responded today.
+**Rationale:** At pilot scale, the job batch per minute is small (0–5 jobs), but concurrent processing keeps total execution time well within Vercel's 30-second function timeout. Promise.allSettled() ensures one failed job doesn't block others. Proactive response detection prevents the awkward "how are you?" arriving after a patient already checked in.
+**Consequences:** No ordering guarantees between jobs in the same batch. Acceptable — jobs are independent by design. If a job fails, it stays in 'pending' state and gets retried next minute.
